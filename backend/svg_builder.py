@@ -1,51 +1,39 @@
 """
-svg_builder.py — Génère le SVG final de l'affiche de course.
+svg_builder.py v2 — Génère le SVG final de l'affiche de course.
 
 Calques Cricut :
-  - calque-noir  : cadres, titres, stats labels, axes profil, encoches dossard
-  - calque-vert  : carte OSM (routes/eau/chemins) + tracé GPS + profil altimétrique
-  - calque-rouge : valeurs stats + annotations profil
+  calque-noir    → Stylo noir   : structure, textes, cadres, encoches
+  calque-routes  → Stylo noir   : routes
+  calque-chemins → Stylo marron : chemins/sentiers
+  calque-eau     → Stylo bleu   : rivières/lacs
+  calque-trace   → Stylo vert   : tracé GPS + profil altimétrique
+  calque-stats   → Stylo rouge  : valeurs stats + annotations profil
 
-Formats supportés (largeur × hauteur en mm, toujours dans 600×300 Cricut) :
-  - "15x20"  → 150×200 mm  portrait
-  - "20x30"  → 300×200 mm  paysage
-  - "a4"     → 297×210 mm  paysage
-  - "30x40"  → 400×300 mm  paysage
+Correctifs v2 :
+  - Couleurs séparées par type OSM (noir routes, marron chemins, bleu eau)
+  - Stats en bandeau horizontal compact (une seule ligne sous le titre)
+  - Profil : ratio hauteur/largeur réaliste (exagération ×5, non infini)
+  - Dossard : occupe tout l'espace disponible dans la colonne droite
+  - Date/lieu repositionnés à droite du titre
 """
 
 import math
-from typing import Optional
 
-# Résolution interne : 1mm = 3.7795px (96dpi)
 MM_TO_PX = 3.7795
 
 FORMATS = {
-    "15x20": (150, 200),   # portrait → on pivote en paysage si nécessaire
+    "15x20": (150, 200),
     "20x30": (300, 200),
     "a4":    (297, 210),
     "30x40": (400, 300),
 }
 
+COUL_ROUTES  = "#222222"
+COUL_CHEMINS = "#7B4A1E"
+COUL_EAU     = "#1a4fa0"
+
 
 def mm(v): return v * MM_TO_PX
-
-
-def coords_to_svg(coords_list, bbox_m, map_x, map_y, map_w, map_h):
-    """Convertit une liste de coordonnées Mercator (EPSG:3857) en points SVG."""
-    x_min, y_min, x_max, y_max = bbox_m
-    span_x = x_max - x_min or 1
-    span_y = y_max - y_min or 1
-
-    paths = []
-    for coords in coords_list:
-        pts = []
-        for x, y in coords:
-            sx = map_x + (x - x_min) / span_x * map_w
-            sy = map_y + map_h - (y - y_min) / span_y * map_h
-            pts.append(f"{sx:.1f},{sy:.1f}")
-        if pts:
-            paths.append("M " + " L ".join(pts))
-    return paths
 
 
 def latlon_to_mercator(lat, lon):
@@ -59,123 +47,125 @@ def build_svg(
     race_data: dict,
     osm_data: dict,
     format_key: str = "30x40",
-    couleur1: str = "#1a7a1a",   # vert
-    couleur2: str = "#cc1a00",   # rouge
+    couleur_trace: str = "#1a7a1a",
+    couleur_stats: str = "#cc1a00",
     dossard_w_mm: float = 210,
     dossard_h_mm: float = 148,
     points_marquants: list = None,
 ) -> str:
-    """
-    Génère et retourne le SVG complet de l'affiche.
 
-    race_data : résultat de gpx_parser.parse_gpx() + infos saisies par l'utilisateur
-    osm_data  : résultat de osm_fetcher.fetch_osm_geometries()
-    """
-
-    # ── Dimensions affiche ──────────────────────────────────────────────────
     w_mm, h_mm = FORMATS.get(format_key, (400, 300))
     W = mm(w_mm)
     H = mm(h_mm)
 
-    MARGE = mm(6)
-    INNER_W = W - 2 * MARGE
-    INNER_H = H - 2 * MARGE
+    MARGE    = mm(5)
+    INNER_W  = W - 2 * MARGE
+    INNER_H  = H - 2 * MARGE
 
-    # ── Zones de mise en page ───────────────────────────────────────────────
-    # Titre : 12% hauteur
-    TITRE_H = INNER_H * 0.12
+    # ── Répartition verticale ────────────────────────────────────────────────
+    TITRE_H  = INNER_H * 0.10
+    STATS_H  = mm(10)
+    PROFIL_H = INNER_H * 0.28
+    MIDDLE_H = INNER_H - TITRE_H - STATS_H - PROFIL_H
 
-    # Zone principale (sous le titre) : 88%
-    MAIN_H = INNER_H - TITRE_H
-    MAIN_Y = MARGE + TITRE_H
+    TITRE_Y  = MARGE
+    STATS_Y  = MARGE + TITRE_H
+    MIDDLE_Y = STATS_Y + STATS_H
+    PROFIL_Y = MIDDLE_Y + MIDDLE_H
 
-    # Colonne gauche (carte) : 60% largeur
-    # Colonne droite (stats + dossard) : 40% largeur
-    COL_LEFT_W = INNER_W * 0.60
-    COL_RIGHT_W = INNER_W * 0.40
+    # ── Colonnes middle ──────────────────────────────────────────────────────
+    COL_LEFT_W  = INNER_W * 0.58
+    COL_RIGHT_W = INNER_W * 0.42
     COL_RIGHT_X = MARGE + COL_LEFT_W
 
-    # Dans la colonne gauche : carte 50%, profil 50%
-    CARTE_H = MAIN_H * 0.50
-    PROFIL_H = MAIN_H * 0.50
-
     CARTE_X = MARGE
-    CARTE_Y = MAIN_Y
+    CARTE_Y = MIDDLE_Y
     CARTE_W = COL_LEFT_W
+    CARTE_H = MIDDLE_H
 
-    PROFIL_X = MARGE
-    PROFIL_Y = MAIN_Y + CARTE_H
-    PROFIL_W = INNER_W  # pleine largeur
-
-    # Dossard : taille réelle convertie en px, centré dans la colonne droite
+    # ── Dossard : remplit la colonne droite ──────────────────────────────────
     dos_w_px = mm(dossard_w_mm)
     dos_h_px = mm(dossard_h_mm)
-
-    # Si le dossard est trop grand pour la colonne droite → on le réduit
-    max_dos_w = COL_RIGHT_W - mm(4)
-    max_dos_h = MAIN_H * 0.58
+    max_dos_w = COL_RIGHT_W - mm(6)
+    max_dos_h = MIDDLE_H - mm(10)
     scale = min(1.0, max_dos_w / dos_w_px, max_dos_h / dos_h_px)
     dos_w_px *= scale
     dos_h_px *= scale
-
-    # Stats : hauteur disponible au-dessus du dossard
-    STATS_H = MAIN_H - dos_h_px - mm(5)
-    STATS_Y = MAIN_Y
-    STATS_X = COL_RIGHT_X
-
     DOS_X = COL_RIGHT_X + (COL_RIGHT_W - dos_w_px) / 2
-    DOS_Y = MAIN_Y + STATS_H + mm(3)
+    DOS_Y = MIDDLE_Y + (MIDDLE_H - dos_h_px) / 2
 
-    # ── Données race ────────────────────────────────────────────────────────
-    nom = race_data.get("nom", "Trail")
+    # ── Données race ─────────────────────────────────────────────────────────
+    nom        = race_data.get("nom", "Trail")
     sous_titre = race_data.get("sous_titre", "")
-    date = race_data.get("date", "")
-    lieu = race_data.get("lieu", "")
-    distance = race_data.get("total_distance_km", 0)
-    d_plus = race_data.get("d_plus", 0)
-    temps = race_data.get("temps", "")
+    date       = race_data.get("date", "")
+    lieu       = race_data.get("lieu", "")
+    distance   = race_data.get("total_distance_km", 0)
+    d_plus     = race_data.get("d_plus", 0)
+    temps      = race_data.get("temps", "")
     classement = race_data.get("classement", "")
     profil_pts = race_data.get("profil", [])
-    trace_pts = race_data.get("trace", [])
+    trace_pts  = race_data.get("trace", [])
 
-    # ── Calcul bounding box Mercator pour la carte ──────────────────────────
+    # ── Bounding box Mercator ─────────────────────────────────────────────────
     if trace_pts:
-        merc = [latlon_to_mercator(p["lat"], p["lon"]) for p in trace_pts]
-        mx_list = [p[0] for p in merc]
-        my_list = [p[1] for p in merc]
-        bbox_m = (min(mx_list), min(my_list), max(mx_list), max(my_list))
-        span_x = bbox_m[2] - bbox_m[0] or 1
-        span_y = bbox_m[3] - bbox_m[1] or 1
-        # Centrage avec marge 5%
-        margin_x = span_x * 0.05
-        margin_y = span_y * 0.05
-        bbox_m = (bbox_m[0]-margin_x, bbox_m[1]-margin_y,
-                  bbox_m[2]+margin_x, bbox_m[3]+margin_y)
+        merc   = [latlon_to_mercator(p["lat"], p["lon"]) for p in trace_pts]
+        mx_min = min(p[0] for p in merc)
+        mx_max = max(p[0] for p in merc)
+        my_min = min(p[1] for p in merc)
+        my_max = max(p[1] for p in merc)
+        span_x = (mx_max - mx_min) or 1
+        span_y = (my_max - my_min) or 1
+        mg = 0.06
+        bbox_m = (mx_min - span_x*mg, my_min - span_y*mg,
+                  mx_max + span_x*mg, my_max + span_y*mg)
     else:
         bbox_m = (0, 0, 1, 1)
 
+    bx0, by0, bx1, by1 = bbox_m
+
     def to_svg_xy(lat, lon):
         x, y = latlon_to_mercator(lat, lon)
-        bx0, by0, bx1, by1 = bbox_m
         sx = CARTE_X + (x - bx0) / (bx1 - bx0) * CARTE_W
         sy = CARTE_Y + CARTE_H - (y - by0) / (by1 - by0) * CARTE_H
         return sx, sy
 
-    # ── Profil altimétrique ──────────────────────────────────────────────────
-    PROFIL_INNER_X = PROFIL_X + mm(10)  # marge gauche pour altitude label
-    PROFIL_INNER_W = PROFIL_W - mm(14)
-    PROFIL_INNER_Y = PROFIL_Y + mm(12)  # marge haut pour annotations
-    PROFIL_INNER_H = PROFIL_H - mm(18)  # marge bas pour labels km
+    def osm_paths(coords_list):
+        paths = []
+        for coords in coords_list:
+            if not coords:
+                continue
+            pts = []
+            for x, y in coords:
+                sx = CARTE_X + (x - bx0) / (bx1 - bx0) * CARTE_W
+                sy = CARTE_Y + CARTE_H - (y - by0) / (by1 - by0) * CARTE_H
+                pts.append(f"{sx:.1f},{sy:.1f}")
+            if pts:
+                paths.append("M " + " L ".join(pts))
+        return paths
+
+    # ── Profil : ratio réaliste ───────────────────────────────────────────────
+    PROFIL_INNER_X = MARGE + mm(10)
+    PROFIL_INNER_W = INNER_W - mm(14)
+    PROFIL_INNER_Y = PROFIL_Y + mm(11)
+    PROFIL_INNER_H = PROFIL_H - mm(16)
 
     alt_vals = [p["alt"] for p in profil_pts] if profil_pts else [0, 1]
-    alt_min = min(alt_vals)
-    alt_max = max(alt_vals)
-    alt_span = (alt_max - alt_min) or 1
+    alt_min  = min(alt_vals)
+    alt_max  = max(alt_vals)
     dist_max = profil_pts[-1]["dist_km"] if profil_pts else 1
+    dist_m   = dist_max * 1000
+    dh_geo   = (alt_max - alt_min) or 1
+
+    # Exagération verticale ×5, plafonnée à PROFIL_INNER_H
+    ratio  = dh_geo / dist_m if dist_m > 0 else 0.05
+    h_used = min(PROFIL_INNER_H, max(PROFIL_INNER_H * 0.25, PROFIL_INNER_W * ratio * 5))
+    profil_offset_y = PROFIL_INNER_H - h_used
+    alt_span = dh_geo
 
     def profil_xy(dist_km, alt):
         px = PROFIL_INNER_X + (dist_km / dist_max) * PROFIL_INNER_W
-        py = PROFIL_INNER_Y + PROFIL_INNER_H - ((alt - alt_min) / alt_span) * PROFIL_INNER_H
+        py = (PROFIL_INNER_Y + profil_offset_y
+              + h_used - ((alt - alt_min) / alt_span) * h_used)
         return px, py
 
     profil_points_str = " ".join(
@@ -183,261 +173,214 @@ def build_svg(
         for p in profil_pts
     ) if profil_pts else ""
 
-    # ── Tracé GPS polyline ───────────────────────────────────────────────────
+    # ── Tracé GPS ─────────────────────────────────────────────────────────────
     trace_points_str = ""
     if trace_pts:
         pts = [to_svg_xy(p["lat"], p["lon"]) for p in trace_pts]
         trace_points_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
 
-    # ── OSM géométries → SVG paths ───────────────────────────────────────────
-    def osm_paths(coords_list_of_lists):
-        paths = []
-        for coords in coords_list_of_lists:
-            if not coords:
-                continue
-            pts_svg = []
-            for x, y in coords:
-                bx0, by0, bx1, by1 = bbox_m
-                sx = CARTE_X + (x - bx0) / (bx1 - bx0) * CARTE_W
-                sy = CARTE_Y + CARTE_H - (y - by0) / (by1 - by0) * CARTE_H
-                pts_svg.append(f"{sx:.1f},{sy:.1f}")
-            paths.append("M " + " L ".join(pts_svg))
-        return paths
+    # ── Encoches dossard ─────────────────────────────────────────────────────
+    enc  = mm(9)
+    dx1, dy1 = DOS_X, DOS_Y
+    dx2, dy2 = DOS_X + dos_w_px, DOS_Y + dos_h_px
+    enc_hg = f'<line x1="{dx1:.1f}" y1="{dy1+enc:.1f}" x2="{dx1+enc:.1f}" y2="{dy1:.1f}" stroke="black" stroke-width="1.8"/>'
+    enc_hd = f'<line x1="{dx2-enc:.1f}" y1="{dy1:.1f}" x2="{dx2:.1f}" y2="{dy1+enc:.1f}" stroke="black" stroke-width="1.8"/>'
+    enc_bg = f'<line x1="{dx1:.1f}" y1="{dy2-enc:.1f}" x2="{dx1+enc:.1f}" y2="{dy2:.1f}" stroke="black" stroke-width="1.8"/>'
+    enc_bd = f'<line x1="{dx2-enc:.1f}" y1="{dy2:.1f}" x2="{dx2:.1f}" y2="{dy2-enc:.1f}" stroke="black" stroke-width="1.8"/>'
 
-    # ── Encoches dossard ────────────────────────────────────────────────────
-    enc = mm(8)  # longueur encoche
-    dx1 = DOS_X
-    dy1 = DOS_Y
-    dx2 = DOS_X + dos_w_px
-    dy2 = DOS_Y + dos_h_px
+    # ── Stats bandeau horizontal ──────────────────────────────────────────────
+    cell_w   = INNER_W / 4
+    fs_label = mm(2.1)
+    fs_val   = mm(4.4)
 
-    # Coin haut-gauche : /
-    enc_hg = f'<line x1="{dx1:.1f}" y1="{dy1+enc:.1f}" x2="{dx1+enc:.1f}" y2="{dy1:.1f}" stroke="black" stroke-width="1.5"/>'
-    # Coin haut-droit : \
-    enc_hd = f'<line x1="{dx2-enc:.1f}" y1="{dy1:.1f}" x2="{dx2:.1f}" y2="{dy1+enc:.1f}" stroke="black" stroke-width="1.5"/>'
-    # Coin bas-gauche : \
-    enc_bg = f'<line x1="{dx1:.1f}" y1="{dy2-enc:.1f}" x2="{dx1+enc:.1f}" y2="{dy2:.1f}" stroke="black" stroke-width="1.5"/>'
-    # Coin bas-droit : /
-    enc_bd = f'<line x1="{dx2-enc:.1f}" y1="{dy2:.1f}" x2="{dx2:.1f}" y2="{dy2-enc:.1f}" stroke="black" stroke-width="1.5"/>'
+    def stat_band(i, label, valeur, unit=""):
+        cx  = MARGE + i * cell_w
+        cy  = STATS_Y
+        sep = (f'<line x1="{cx:.1f}" y1="{cy+mm(1.5):.1f}" x2="{cx:.1f}" y2="{cy+STATS_H-mm(1.5):.1f}" '
+               f'stroke="black" stroke-width="0.4"/>') if i > 0 else ""
+        val_txt = f"{valeur}{' ' + unit if unit else ''}"
+        return f"""{sep}
+    <text x="{cx + cell_w/2:.1f}" y="{cy + mm(3.2):.1f}" text-anchor="middle" fill="black" stroke="none"
+          font-family="Georgia, serif" font-size="{fs_label:.1f}" letter-spacing="1">{label}</text>
+    <text x="{cx + cell_w/2:.1f}" y="{cy + mm(8.0):.1f}" text-anchor="middle" fill="{couleur_stats}" stroke="none"
+          font-family="'Palatino Linotype', Palatino, Georgia, serif" font-size="{fs_val:.1f}" font-weight="bold">{val_txt}</text>"""
 
-    # ── Stats 4 cases ────────────────────────────────────────────────────────
-    cell_w = COL_RIGHT_W / 2
-    cell_h = STATS_H / 2
+    stats_svg  = stat_band(0, "DISTANCE",   f"{distance:.1f}", "km")
+    stats_svg += stat_band(1, "DÉNIVELÉ +", f"{d_plus:,}".replace(",", " "), "m")
+    stats_svg += stat_band(2, "TEMPS",       temps)
+    stats_svg += stat_band(3, "CLASSEMENT",  classement)
 
-    def stat_cell(col, row, label, valeur, unit=""):
-        cx = STATS_X + col * cell_w
-        cy = STATS_Y + row * cell_h
-        label_y = cy + mm(4)
-        val_y = cy + cell_h * 0.62
-        unit_y = cy + cell_h * 0.82
-        return f"""
-    <rect x="{cx:.1f}" y="{cy:.1f}" width="{cell_w:.1f}" height="{cell_h:.1f}" stroke="black" stroke-width="0.8" fill="none"/>
-    <text x="{cx + cell_w/2:.1f}" y="{label_y:.1f}" text-anchor="middle" fill="black" font-family="Georgia, serif" font-size="{mm(3):.1f}" letter-spacing="1.5">{label}</text>
-    <text x="{cx + cell_w/2:.1f}" y="{val_y:.1f}" text-anchor="middle" fill="{couleur2}" font-family="'Palatino Linotype', Palatino, Georgia, serif" font-size="{mm(7):.1f}" font-weight="bold">{valeur}</text>
-    <text x="{cx + cell_w/2:.1f}" y="{unit_y:.1f}" text-anchor="middle" fill="{couleur2}" font-family="Georgia, serif" font-size="{mm(2.8):.1f}" font-style="italic">{unit}</text>"""
-
-    stats_svg = ""
-    stats_svg += stat_cell(0, 0, "DISTANCE", f"{distance:.1f}", "km")
-    stats_svg += stat_cell(1, 0, "DÉNIVELÉ +", f"{d_plus:,}".replace(",", " "), "m")
-    stats_svg += stat_cell(0, 1, "TEMPS", temps, "")
-    stats_svg += stat_cell(1, 1, "CLASSEMENT", classement, "")
-
-    # ── Annotations profil (points marquants) ───────────────────────────────
+    # ── Annotations profil ────────────────────────────────────────────────────
     annotations_svg = ""
     if points_marquants:
         for pt in points_marquants:
-            d = pt.get("dist_km", 0)
-            a = pt.get("alt", alt_min)
-            nom_pt = pt.get("nom", "")
+            d       = pt.get("dist_km", 0)
+            a       = pt.get("alt", alt_min)
+            nom_pt  = pt.get("nom", "")
             type_pt = pt.get("type", "")
-            px, py = profil_xy(d, a)
-            ligne2 = f"{type_pt} · " if type_pt else ""
+            px, py  = profil_xy(d, a)
+            ann_y   = PROFIL_INNER_Y + profil_offset_y - mm(1.5)
+            ligne2  = f"{type_pt} · " if type_pt else ""
             annotations_svg += f"""
-    <line x1="{px:.1f}" y1="{py:.1f}" x2="{px:.1f}" y2="{PROFIL_INNER_Y - mm(2):.1f}" stroke="{couleur2}" stroke-width="0.7" stroke-dasharray="2,2"/>
-    <text x="{px:.1f}" y="{PROFIL_INNER_Y - mm(3.5):.1f}" text-anchor="middle" fill="{couleur2}" font-family="Georgia, serif" font-size="{mm(2.5):.1f}" font-style="italic">{nom_pt}</text>
-    <text x="{px:.1f}" y="{PROFIL_INNER_Y - mm(6.5):.1f}" text-anchor="middle" fill="{couleur2}" font-family="Georgia, serif" font-size="{mm(2.2):.1f}">{ligne2}km {d:.1f} · {a:.0f}m</text>"""
+    <line x1="{px:.1f}" y1="{py:.1f}" x2="{px:.1f}" y2="{ann_y:.1f}"
+          stroke="{couleur_stats}" stroke-width="0.7" stroke-dasharray="2,2"/>
+    <text x="{px:.1f}" y="{ann_y - mm(0.8):.1f}" text-anchor="middle" fill="{couleur_stats}" stroke="none"
+          font-family="Georgia, serif" font-size="{mm(2.4):.1f}" font-style="italic">{nom_pt}</text>
+    <text x="{px:.1f}" y="{ann_y - mm(3.5):.1f}" text-anchor="middle" fill="{couleur_stats}" stroke="none"
+          font-family="Georgia, serif" font-size="{mm(2.0):.1f}">{ligne2}km {d:.1f} · {a:.0f}m</text>"""
 
-    # ── OSM SVG strings ──────────────────────────────────────────────────────
+    # ── OSM SVG strings ───────────────────────────────────────────────────────
     osm_routes_svg = ""
     for rtype, rdata in (osm_data.get("routes") or {}).items():
-        paths = osm_paths(rdata["coords"])
         lw = rdata["largeur"]
-        for path in paths:
-            osm_routes_svg += f'<path d="{path}" stroke="{couleur1}" stroke-width="{lw:.2f}" fill="none" opacity="0.7"/>\n'
+        for path in osm_paths(rdata["coords"]):
+            osm_routes_svg += f'<path d="{path}" stroke="{COUL_ROUTES}" stroke-width="{lw:.2f}" fill="none" opacity="0.75"/>\n'
 
     osm_chemins_svg = ""
     for ctype, cdata in (osm_data.get("chemins") or {}).items():
-        paths = osm_paths(cdata["coords"])
-        lw = cdata["largeur"]
+        lw   = cdata["largeur"]
         dash = ' stroke-dasharray="3,3"' if cdata.get("dash") else ""
-        for path in paths:
-            osm_chemins_svg += f'<path d="{path}" stroke="{couleur1}" stroke-width="{lw:.2f}" fill="none" opacity="0.6"{dash}/>\n'
+        for path in osm_paths(cdata["coords"]):
+            osm_chemins_svg += f'<path d="{path}" stroke="{COUL_CHEMINS}" stroke-width="{lw:.2f}" fill="none" opacity="0.85"{dash}/>\n'
 
     osm_eau_svg = ""
     for coords in (osm_data.get("eau_polygones") or []):
-        paths = osm_paths([coords])
-        for path in paths:
-            # Hachures style crayonné
-            osm_eau_svg += f'<path d="{path}" stroke="{couleur1}" stroke-width="1.0" fill="none" opacity="0.8"/>\n'
+        for path in osm_paths([coords]):
+            osm_eau_svg += f'<path d="{path}" stroke="{COUL_EAU}" stroke-width="1.0" fill="none" opacity="0.85"/>\n'
     for coords in (osm_data.get("eau_lignes") or []):
-        paths = osm_paths([coords])
-        for path in paths:
-            osm_eau_svg += f'<path d="{path}" stroke="{couleur1}" stroke-width="0.8" fill="none" opacity="0.7"/>\n'
+        for path in osm_paths([coords]):
+            osm_eau_svg += f'<path d="{path}" stroke="{COUL_EAU}" stroke-width="0.9" fill="none" opacity="0.80"/>\n'
 
-    # ── Titre font-size adaptatif ────────────────────────────────────────────
-    titre_fs = min(mm(9), INNER_W / max(len(nom), 1) * 1.5)
-    sous_titre_fs = min(mm(4.5), INNER_W / max(len(sous_titre or nom), 1) * 1.2)
+    # ── Typographie adaptative ────────────────────────────────────────────────
+    titre_fs    = min(mm(8.5), INNER_W / max(len(nom), 1) * 1.4)
+    ss_titre_fs = min(mm(3.8), INNER_W / max(len(sous_titre or " "), 1) * 1.1)
 
-    # ── Graduations profil ───────────────────────────────────────────────────
-    n_grad = min(10, int(dist_max))
+    # ── Graduations profil ────────────────────────────────────────────────────
+    n_grad   = min(10, int(dist_max))
     grad_svg = ""
+    gy_base  = PROFIL_INNER_Y + PROFIL_INNER_H
+
     for i in range(n_grad + 1):
-        d_km = dist_max * i / n_grad
-        gx, _ = profil_xy(d_km, alt_min)
-        gy_base = PROFIL_INNER_Y + PROFIL_INNER_H
-        grad_svg += f'<line x1="{gx:.1f}" y1="{gy_base:.1f}" x2="{gx:.1f}" y2="{gy_base + mm(1.5):.1f}" stroke="black" stroke-width="0.6"/>'
-        grad_svg += f'<text x="{gx:.1f}" y="{gy_base + mm(3.5):.1f}" text-anchor="middle" fill="black" font-family="Georgia, serif" font-size="{mm(2.2):.1f}">{d_km:.0f}</text>'
+        d_km   = dist_max * i / n_grad
+        gx, _  = profil_xy(d_km, alt_min)
+        grad_svg += (f'<line x1="{gx:.1f}" y1="{gy_base:.1f}" x2="{gx:.1f}" y2="{gy_base+mm(1.5):.1f}" '
+                     f'stroke="black" stroke-width="0.6"/>')
+        grad_svg += (f'<text x="{gx:.1f}" y="{gy_base+mm(3.5):.1f}" text-anchor="middle" fill="black" '
+                     f'font-family="Georgia, serif" font-size="{mm(2.1):.1f}">{d_km:.0f}</text>')
 
-    alt_label_x = PROFIL_INNER_X - mm(2)
-    grad_svg += f'<text x="{alt_label_x:.1f}" y="{PROFIL_INNER_Y:.1f}" text-anchor="end" fill="black" font-family="Georgia, serif" font-size="{mm(2.2):.1f}">{alt_max:.0f}m</text>'
-    grad_svg += f'<text x="{alt_label_x:.1f}" y="{PROFIL_INNER_Y + PROFIL_INNER_H:.1f}" text-anchor="end" fill="black" font-family="Georgia, serif" font-size="{mm(2.2):.1f}">{alt_min:.0f}m</text>'
-    grad_svg += f'<text x="{PROFIL_INNER_X + PROFIL_INNER_W/2:.1f}" y="{PROFIL_INNER_Y + PROFIL_INNER_H + mm(6):.1f}" text-anchor="middle" fill="black" font-family="Georgia, serif" font-size="{mm(2.2):.1f}" letter-spacing="2">km</text>'
+    alt_lx    = PROFIL_INNER_X - mm(2)
+    py_top, _ = profil_xy(0, alt_max)
+    grad_svg += (f'<text x="{alt_lx:.1f}" y="{py_top:.1f}" text-anchor="end" fill="black" '
+                 f'font-family="Georgia, serif" font-size="{mm(2.1):.1f}">{alt_max:.0f}m</text>')
+    grad_svg += (f'<text x="{alt_lx:.1f}" y="{gy_base:.1f}" text-anchor="end" fill="black" '
+                 f'font-family="Georgia, serif" font-size="{mm(2.1):.1f}">{alt_min:.0f}m</text>')
+    grad_svg += (f'<text x="{PROFIL_INNER_X + PROFIL_INNER_W/2:.1f}" y="{gy_base+mm(6):.1f}" '
+                 f'text-anchor="middle" fill="black" font-family="Georgia, serif" '
+                 f'font-size="{mm(2.1):.1f}" letter-spacing="2">km</text>')
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # ASSEMBLAGE SVG
+    # ── Point départ sur la carte ─────────────────────────────────────────────
+    depart_svg = ""
+    if trace_pts:
+        sx, sy = to_svg_xy(trace_pts[0]["lat"], trace_pts[0]["lon"])
+        r1, r2 = mm(2.2), mm(0.9)
+        depart_svg = (f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{r1:.1f}" '
+                      f'stroke="{couleur_trace}" stroke-width="1.5" fill="none"/>'
+                      f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{r2:.1f}" '
+                      f'stroke="{couleur_trace}" stroke-width="1" fill="none"/>')
+
+    sep_stats_y = STATS_Y + STATS_H
+
     # ═══════════════════════════════════════════════════════════════════════
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 {W:.1f} {H:.1f}"
      width="{w_mm}mm" height="{h_mm}mm">
 
-  <!-- AFFICHE : {nom} | Format {format_key} | {w_mm}×{h_mm}mm -->
-  <!--
-    CALQUES CRICUT :
-    - calque-noir  : structure, titres, stats labels, encoches
-    - calque-vert  : carte OSM + tracé GPS + profil
-    - calque-rouge : valeurs stats + annotations profil
-  -->
+  <!-- {nom} | {format_key} | {w_mm}x{h_mm}mm -->
+  <defs>
+    <clipPath id="clip-carte">
+      <rect x="{CARTE_X:.1f}" y="{CARTE_Y:.1f}" width="{CARTE_W:.1f}" height="{CARTE_H:.1f}"/>
+    </clipPath>
+    <clipPath id="clip-profil">
+      <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_INNER_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_INNER_H:.1f}"/>
+    </clipPath>
+  </defs>
 
-  <!-- ═══════════ CALQUE NOIR ═══════════ -->
+  <!-- ═══ CALQUE NOIR ═══ -->
   <g id="calque-noir" stroke="black" fill="none">
+    <rect x="{MARGE:.1f}" y="{MARGE:.1f}" width="{INNER_W:.1f}" height="{INNER_H:.1f}" stroke-width="2.0" fill="none"/>
+    <rect x="{MARGE+mm(1.5):.1f}" y="{MARGE+mm(1.5):.1f}" width="{INNER_W-mm(3):.1f}" height="{INNER_H-mm(3):.1f}" stroke-width="0.4" fill="none"/>
 
-    <!-- Bordure double -->
-    <rect x="{MARGE:.1f}" y="{MARGE:.1f}" width="{INNER_W:.1f}" height="{INNER_H:.1f}" stroke-width="2.2" fill="none"/>
-    <rect x="{MARGE+mm(1.5):.1f}" y="{MARGE+mm(1.5):.1f}" width="{INNER_W-mm(3):.1f}" height="{INNER_H-mm(3):.1f}" stroke-width="0.5" fill="none"/>
-
-    <!-- Titre -->
-    <text x="{W/2:.1f}" y="{MARGE + TITRE_H*0.45:.1f}" text-anchor="middle" fill="black" stroke="none"
+    <text x="{W/2:.1f}" y="{TITRE_Y + TITRE_H*0.52:.1f}" text-anchor="middle" fill="black" stroke="none"
           font-family="'Palatino Linotype', Palatino, Georgia, serif"
-          font-size="{titre_fs:.1f}" font-weight="bold" letter-spacing="3">
-      {nom.upper()}
-    </text>
-    <text x="{W/2:.1f}" y="{MARGE + TITRE_H*0.72:.1f}" text-anchor="middle" fill="black" stroke="none"
-          font-family="Georgia, serif" font-size="{sous_titre_fs:.1f}" font-style="italic" letter-spacing="4">
-      {sous_titre}
-    </text>
+          font-size="{titre_fs:.1f}" font-weight="bold" letter-spacing="3">{nom.upper()}</text>
 
-    <!-- Ligne séparatrice titre -->
-    <line x1="{MARGE+mm(3):.1f}" y1="{MARGE+TITRE_H*0.84:.1f}" x2="{W-MARGE-mm(3):.1f}" y2="{MARGE+TITRE_H*0.84:.1f}" stroke-width="0.8"/>
-    <line x1="{MARGE+mm(3):.1f}" y1="{MARGE+TITRE_H*0.88:.1f}" x2="{W-MARGE-mm(3):.1f}" y2="{MARGE+TITRE_H*0.88:.1f}" stroke-width="0.3"/>
+    <text x="{MARGE+mm(4):.1f}" y="{TITRE_Y + TITRE_H*0.82:.1f}" text-anchor="start" fill="black" stroke="none"
+          font-family="Georgia, serif" font-size="{ss_titre_fs:.1f}" font-style="italic" letter-spacing="4">{sous_titre}</text>
 
-    <!-- Date et lieu -->
-    <text x="{MARGE+mm(4):.1f}" y="{MARGE+TITRE_H*0.97:.1f}" fill="black" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(3):.1f}" letter-spacing="1.5">
-      {date.upper()}  ·  {lieu}
-    </text>
+    <text x="{W-MARGE-mm(4):.1f}" y="{TITRE_Y + TITRE_H*0.82:.1f}" text-anchor="end" fill="black" stroke="none"
+          font-family="Georgia, serif" font-size="{mm(2.5):.1f}" letter-spacing="1">{date}  ·  {lieu}</text>
 
-    <!-- Séparateur vertical gauche/droite -->
-    <line x1="{COL_RIGHT_X:.1f}" y1="{MAIN_Y:.1f}" x2="{COL_RIGHT_X:.1f}" y2="{MAIN_Y + MAIN_H * 0.50:.1f}" stroke-width="0.6" stroke-dasharray="3,3"/>
+    <line x1="{MARGE+mm(3):.1f}" y1="{TITRE_Y+TITRE_H*0.92:.1f}" x2="{W-MARGE-mm(3):.1f}" y2="{TITRE_Y+TITRE_H*0.92:.1f}" stroke-width="0.7"/>
 
-    <!-- Séparateur horizontal carte/profil -->
-    <line x1="{MARGE:.1f}" y1="{PROFIL_Y:.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y:.1f}" stroke-width="0.8"/>
-    <line x1="{MARGE:.1f}" y1="{PROFIL_Y+mm(0.8):.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y+mm(0.8):.1f}" stroke-width="0.3"/>
+    <line x1="{MARGE:.1f}" y1="{STATS_Y:.1f}" x2="{W-MARGE:.1f}" y2="{STATS_Y:.1f}" stroke-width="0.4"/>
+    <line x1="{MARGE:.1f}" y1="{sep_stats_y:.1f}" x2="{W-MARGE:.1f}" y2="{sep_stats_y:.1f}" stroke-width="0.5"/>
 
-    <!-- Cadre carte -->
-    <rect x="{CARTE_X:.1f}" y="{CARTE_Y:.1f}" width="{CARTE_W:.1f}" height="{CARTE_H:.1f}" stroke-width="0.6" fill="none"/>
+    {stats_svg}
 
-    <!-- Label PROFIL ALTIMÉTRIQUE -->
-    <text x="{W/2:.1f}" y="{PROFIL_Y + mm(5):.1f}" text-anchor="middle" fill="black" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(2.5):.1f}" letter-spacing="4">
-      PROFIL ALTIMÉTRIQUE
-    </text>
+    <line x1="{COL_RIGHT_X:.1f}" y1="{MIDDLE_Y+mm(2):.1f}" x2="{COL_RIGHT_X:.1f}" y2="{MIDDLE_Y+MIDDLE_H-mm(2):.1f}" stroke-width="0.5" stroke-dasharray="4,3"/>
+    <rect x="{CARTE_X:.1f}" y="{CARTE_Y:.1f}" width="{CARTE_W:.1f}" height="{CARTE_H:.1f}" stroke-width="0.5" fill="none"/>
 
-    <!-- Cadre profil -->
-    <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_INNER_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_INNER_H:.1f}" stroke-width="0.5" fill="none"/>
+    <line x1="{MARGE:.1f}" y1="{PROFIL_Y:.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y:.1f}" stroke-width="0.7"/>
+    <line x1="{MARGE:.1f}" y1="{PROFIL_Y+mm(0.7):.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y+mm(0.7):.1f}" stroke-width="0.25"/>
 
-    <!-- Ligne de base profil -->
+    <text x="{W/2:.1f}" y="{PROFIL_Y+mm(5):.1f}" text-anchor="middle" fill="black" stroke="none"
+          font-family="Georgia, serif" font-size="{mm(2.3):.1f}" letter-spacing="4">PROFIL ALTIMÉTRIQUE</text>
+
+    <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_INNER_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_INNER_H:.1f}" stroke-width="0.4" fill="none"/>
     <line x1="{PROFIL_INNER_X:.1f}" y1="{PROFIL_INNER_Y+PROFIL_INNER_H:.1f}"
           x2="{PROFIL_INNER_X+PROFIL_INNER_W:.1f}" y2="{PROFIL_INNER_Y+PROFIL_INNER_H:.1f}" stroke-width="0.8"/>
 
-    <!-- Graduations -->
     {grad_svg}
 
-    <!-- Stats 4 cases (cadres seulement) -->
-    {stats_svg}
-
-    <!-- Label CARTE -->
-    <text x="{CARTE_X + CARTE_W/2:.1f}" y="{CARTE_Y + CARTE_H + mm(3.5):.1f}" text-anchor="middle" fill="black" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(2.2):.1f}" letter-spacing="3" font-style="italic">
-      TRACÉ · CARTE TOPOGRAPHIQUE
-    </text>
-
-    <!-- Dossard label -->
-    <text x="{DOS_X + dos_w_px/2:.1f}" y="{DOS_Y - mm(2):.1f}" text-anchor="middle" fill="black" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(2.5):.1f}" letter-spacing="3">
-      DOSSARD
-    </text>
-
-    <!-- Rectangle dossard -->
+    <text x="{DOS_X+dos_w_px/2:.1f}" y="{DOS_Y-mm(2.5):.1f}" text-anchor="middle" fill="black" stroke="none"
+          font-family="Georgia, serif" font-size="{mm(2.3):.1f}" letter-spacing="3">DOSSARD</text>
     <rect x="{DOS_X:.1f}" y="{DOS_Y:.1f}" width="{dos_w_px:.1f}" height="{dos_h_px:.1f}" stroke-width="0.8" fill="none"/>
-
-    <!-- Encoches dossard (à 45°) -->
     {enc_hg}
     {enc_hd}
     {enc_bg}
     {enc_bd}
-
   </g>
 
-  <!-- ═══════════ CALQUE VERT ═══════════ -->
-  <g id="calque-vert" stroke="{couleur1}" fill="none">
+  <!-- ═══ CALQUE ROUTES (noir) ═══ -->
+  <g id="calque-routes" clip-path="url(#clip-carte)">
+    {osm_routes_svg}
+  </g>
 
-    <!-- Clip carte -->
-    <defs>
-      <clipPath id="clip-carte">
-        <rect x="{CARTE_X:.1f}" y="{CARTE_Y:.1f}" width="{CARTE_W:.1f}" height="{CARTE_H:.1f}"/>
-      </clipPath>
-      <clipPath id="clip-profil">
-        <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_INNER_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_INNER_H:.1f}"/>
-      </clipPath>
-    </defs>
+  <!-- ═══ CALQUE CHEMINS (marron #7B4A1E) ═══ -->
+  <g id="calque-chemins" clip-path="url(#clip-carte)">
+    {osm_chemins_svg}
+  </g>
 
+  <!-- ═══ CALQUE EAU (bleu #1a4fa0) ═══ -->
+  <g id="calque-eau" clip-path="url(#clip-carte)">
+    {osm_eau_svg}
+  </g>
+
+  <!-- ═══ CALQUE TRACE + PROFIL ═══ -->
+  <g id="calque-trace" fill="none">
     <g clip-path="url(#clip-carte)">
-      <!-- Eau -->
-      {osm_eau_svg}
-      <!-- Routes -->
-      {osm_routes_svg}
-      <!-- Chemins / sentiers -->
-      {osm_chemins_svg}
-      <!-- Tracé GPS -->
-      {'<polyline points="' + trace_points_str + f'" stroke="{couleur1}" stroke-width="2.5" fill="none"/>' if trace_points_str else ''}
-      <!-- Point départ -->
-      {''.join([f'<circle cx="{to_svg_xy(trace_pts[0]["lat"], trace_pts[0]["lon"])[0]:.1f}" cy="{to_svg_xy(trace_pts[0]["lat"], trace_pts[0]["lon"])[1]:.1f}" r="4" stroke="{couleur1}" stroke-width="1.5" fill="none"/>' if trace_pts else ''])}
+      {'<polyline points="' + trace_points_str + f'" stroke="{couleur_trace}" stroke-width="2.5" fill="none"/>' if trace_points_str else ''}
+      {depart_svg}
     </g>
-
-    <!-- Profil altimétrique -->
     <g clip-path="url(#clip-profil)">
-      {'<polyline points="' + profil_points_str + f'" stroke="{couleur1}" stroke-width="1.8" fill="none"/>' if profil_points_str else ''}
+      {'<polyline points="' + profil_points_str + f'" stroke="{couleur_trace}" stroke-width="1.8" fill="none"/>' if profil_points_str else ''}
     </g>
-
   </g>
 
-  <!-- ═══════════ CALQUE ROUGE ═══════════ -->
-  <g id="calque-rouge" stroke="{couleur2}" fill="none">
-
-    <!-- Annotations profil (au-dessus de la courbe) -->
+  <!-- ═══ CALQUE STATS + ANNOTATIONS (rouge) ═══ -->
+  <g id="calque-stats" fill="none">
     {annotations_svg}
-
   </g>
 
 </svg>"""

@@ -55,8 +55,8 @@ class GenerateRequest(BaseModel):
     format_key: str = "30x40"   # "15x20" | "20x30" | "a4" | "30x40"
 
     # Couleurs stylos
-    couleur_vert: str = "#1a7a1a"
-    couleur_rouge: str = "#cc1a00"
+    couleur_trace: str = "#1a7a1a"   # tracé GPS + profil
+    couleur_stats: str = "#cc1a00"   # valeurs stats + annotations
 
     # Niveau de détail OSM
     osm_preset: str = "trail"    # "trail" | "standard" | "detaille"
@@ -159,8 +159,8 @@ async def _run_generation(job_id: str, gpx_data: dict, req: GenerateRequest):
             race_data=race_data,
             osm_data=osm_data,
             format_key=req.format_key,
-            couleur1=req.couleur_vert,
-            couleur2=req.couleur_rouge,
+            couleur_trace=req.couleur_trace,
+            couleur_stats=req.couleur_stats,
             dossard_w_mm=req.dossard_largeur_mm,
             dossard_h_mm=req.dossard_hauteur_mm,
             points_marquants=points_marquants,
