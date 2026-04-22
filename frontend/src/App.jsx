@@ -109,6 +109,7 @@ export default function App() {
     setGpxLoading(true)
     setSvgUrl(null)
     setSvgContent(null)
+    setJobStatus(null)
 
     const fd = new FormData()
     fd.append('file', file)
@@ -119,13 +120,14 @@ export default function App() {
       if (!res.ok) throw new Error(data.detail || 'Erreur parsing GPX')
       setGpxStats(data)
       setGpxToken(data.token)
-      if (data.nom_gpx && !nom) setNom(data.nom_gpx)
+      // Toujours mettre à jour le nom depuis le GPX (nouveau fichier = nouveau nom)
+      if (data.nom_gpx) setNom(data.nom_gpx)
     } catch (e) {
       setGpxError(e.message)
     } finally {
       setGpxLoading(false)
     }
-  }, [nom])
+  }, [])
 
   const onDrop = useCallback((e) => {
     e.preventDefault()
@@ -181,8 +183,8 @@ export default function App() {
       dossard_largeur_mm: parseFloat(dosW),
       dossard_hauteur_mm: parseFloat(dosH),
       format_key: format,
-      couleur_vert: coulVert,
-      couleur_rouge: coulRouge,
+      couleur_trace: coulVert,
+      couleur_stats: coulRouge,
       osm_preset: osmAdvanced ? 'custom' : osmPreset,
       osm_custom: osmAdvanced ? osmCustom : null,
       points_marquants: points
@@ -391,16 +393,16 @@ export default function App() {
                 <input type="color" value={coulNoir} onChange={e => setCoulNoir(e.target.value)} />
               </div>
               <div className="color-field">
-                <label>🟢 Stylo 2 — Vert</label>
+                <label>🟢 Tracé + Profil</label>
                 <input type="color" value={coulVert} onChange={e => setCoulVert(e.target.value)} />
               </div>
               <div className="color-field">
-                <label>🔴 Stylo 3 — Rouge</label>
+                <label>🔴 Stats + Annotations</label>
                 <input type="color" value={coulRouge} onChange={e => setCoulRouge(e.target.value)} />
               </div>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>
-              Le SVG contient 3 calques séparés — un par stylo Cricut
+              Routes = noir · Sentiers = marron · Eau = bleu (couleurs fixes dans le SVG)
             </p>
           </div>
 
