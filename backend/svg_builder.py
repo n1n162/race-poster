@@ -143,35 +143,111 @@ def build_svg(
                 paths.append("M " + " L ".join(pts))
         return paths
 
-    # ── Profil : ratio réaliste ───────────────────────────────────────────────
-    PROFIL_INNER_X = MARGE + mm(10)
-    PROFIL_INNER_W = INNER_W - mm(14)
-    PROFIL_INNER_Y = PROFIL_Y + mm(11)
-    PROFIL_INNER_H = PROFIL_H - mm(16)
+    # ── Profil : style profilV3 (courbe + fill, pas d'axes, ratio plat) ─────────
+    # Zone profil : marge gauche/droite minimale, annotations au-dessus
+    ANN_H       = mm(18)   # hauteur réservée aux annotations au-dessus
+    COURBE_H    = PROFIL_H - ANN_H - mm(4)  # hauteur de la courbe elle-même
+    PROFIL_INNER_X = MARGE + mm(3)
+    PROFIL_INNER_W = INNER_W - mm(6)
+    COURBE_BASE_Y  = PROFIL_Y + PROFIL_H - mm(2)  # ligne de base (bas de la courbe)
+    COURBE_TOP_Y   = COURBE_BASE_Y - COURBE_H      # sommet max de la courbe
 
     alt_vals = [p["alt"] for p in profil_pts] if profil_pts else [0, 1]
     alt_min  = min(alt_vals)
     alt_max  = max(alt_vals)
     dist_max = profil_pts[-1]["dist_km"] if profil_pts else 1
-    dist_m   = dist_max * 1000
-    dh_geo   = (alt_max - alt_min) or 1
+    alt_span = (alt_max - alt_min) or 1
 
-    # Exagération verticale ×5, plafonnée à PROFIL_INNER_H
-    ratio  = dh_geo / dist_m if dist_m > 0 else 0.05
-    h_used = min(PROFIL_INNER_H, max(PROFIL_INNER_H * 0.25, PROFIL_INNER_W * ratio * 5))
-    profil_offset_y = PROFIL_INNER_H - h_used
-    alt_span = dh_geo
+    # Zone annotations : commence au-dessus de la courbe
+    ANN_ZONE_Y = PROFIL_Y + mm(2)   # y du haut de la zone annotations
 
     def profil_xy(dist_km, alt):
         px = PROFIL_INNER_X + (dist_km / dist_max) * PROFIL_INNER_W
-        py = (PROFIL_INNER_Y + profil_offset_y
-              + h_used - ((alt - alt_min) / alt_span) * h_used)
+        py = COURBE_BASE_Y - ((alt - alt_min) / alt_span) * COURBE_H
         return px, py
 
-    profil_points_str = " ".join(
-        f"{profil_xy(p['dist_km'], p['alt'])[0]:.1f},{profil_xy(p['dist_km'], p['alt'])[1]:.1f}"
+    # Polyline courbe
+    profil_points_list = [
+        profil_xy(p["dist_km"], p["alt"])
         for p in profil_pts
-    ) if profil_pts else ""
+    ] if profil_pts else []
+
+    profil_points_str = " ".join(
+        f"{x:.1f},{y:.1f}" for x, y in profil_points_list
+    )
+
+    # Path fill : courbe + fermeture par le bas
+    if profil_points_list:
+        x_start = profil_points_list[0][0]
+        x_end   = profil_points_list[-1][0]
+        fill_path = (
+            f"M {x_start:.1f},{COURBE_BASE_Y:.1f} "
+            + " ".join(f"L {x:.1f},{y:.1f}" for x, y in profil_points_list)
+            + f" L {x_end:.1f},{COURBE_BASE_Y:.1f} Z"
+        )
+    else:
+        fill_path = ""
+
+    # ── Annotations profil (style profilV3) ──────────────────────────────────
+    # Calcul dynamique des positions Y pour éviter les chevauchements
+    # Chaque annotation = ligne verticale grise + 3 lignes de texte empilées
+    fs_ann_nom  = mm(2.6)
+    fs_ann_info = mm(2.2)
+    line_h      = mm(3.2)
+
+    annotations_svg = ""
+    if points_marquants:
+        # Trier par distance
+        pts_sorted = sorted(points_marquants, key=lambda p: p.get("dist_km", 0))
+        for pt in pts_sorted:
+            d      = pt.get("dist_km", 0)
+            a      = pt.get("alt", alt_min)
+            nom_pt = pt.get("nom", "")
+            typ_pt = pt.get("type", "")
+            px, py = profil_xy(d, a)
+
+            # Ligne verticale grise du point jusqu'au haut de la zone annotations
+            ann_line_top = ANN_ZONE_Y + mm(1)
+            annotations_svg += (
+                f'<line x1="{px:.1f}" y1="{py:.1f}" x2="{px:.1f}" y2="{ann_line_top:.1f}" '
+                f'stroke="#808080" stroke-width="0.6" stroke-linecap="round"/>'
+            )
+
+            # Textes empilés (comme profilV3) : nom, type si présent, dist, alt
+            ty = ANN_ZONE_Y + mm(0.5)
+            annotations_svg += (
+                f'<text x="{px:.1f}" y="{ty + fs_ann_nom:.1f}" text-anchor="middle" '
+                f'fill="{couleur_stats}" stroke="none" '
+                f'font-family="Georgia, serif" font-size="{fs_ann_nom:.1f}" font-style="italic">'
+                f'{nom_pt}</text>'
+            )
+            ty += fs_ann_nom + mm(0.5)
+            if typ_pt:
+                annotations_svg += (
+                    f'<text x="{px:.1f}" y="{ty + fs_ann_info:.1f}" text-anchor="middle" '
+                    f'fill="{couleur_stats}" stroke="none" '
+                    f'font-family="Georgia, serif" font-size="{fs_ann_info:.1f}">'
+                    f'{typ_pt}</text>'
+                )
+                ty += fs_ann_info + mm(0.4)
+            annotations_svg += (
+                f'<text x="{px:.1f}" y="{ty + fs_ann_info:.1f}" text-anchor="middle" '
+                f'fill="{couleur_stats}" stroke="none" '
+                f'font-family="Georgia, serif" font-size="{fs_ann_info:.1f}">'
+                f'Dist : {d:.1f} km</text>'
+            )
+            ty += fs_ann_info + mm(0.4)
+            annotations_svg += (
+                f'<text x="{px:.1f}" y="{ty + fs_ann_info:.1f}" text-anchor="middle" '
+                f'fill="{couleur_stats}" stroke="none" '
+                f'font-family="Georgia, serif" font-size="{fs_ann_info:.1f}">'
+                f'Alt : {a:.0f} m</text>'
+            )
+
+    # Variables legacy pour compatibilité (graduations etc.)
+    PROFIL_INNER_Y = ANN_ZONE_Y
+    PROFIL_INNER_H = PROFIL_H - mm(6)
+    profil_offset_y = 0
 
     # ── Tracé GPS ─────────────────────────────────────────────────────────────
     trace_points_str = ""
@@ -210,24 +286,7 @@ def build_svg(
     stats_svg += stat_band(2, "TEMPS",       temps)
     stats_svg += stat_band(3, "CLASSEMENT",  classement)
 
-    # ── Annotations profil ────────────────────────────────────────────────────
-    annotations_svg = ""
-    if points_marquants:
-        for pt in points_marquants:
-            d       = pt.get("dist_km", 0)
-            a       = pt.get("alt", alt_min)
-            nom_pt  = pt.get("nom", "")
-            type_pt = pt.get("type", "")
-            px, py  = profil_xy(d, a)
-            ann_y   = PROFIL_INNER_Y + profil_offset_y - mm(1.5)
-            ligne2  = f"{type_pt} · " if type_pt else ""
-            annotations_svg += f"""
-    <line x1="{px:.1f}" y1="{py:.1f}" x2="{px:.1f}" y2="{ann_y:.1f}"
-          stroke="{couleur_stats}" stroke-width="0.7" stroke-dasharray="2,2"/>
-    <text x="{px:.1f}" y="{ann_y - mm(0.8):.1f}" text-anchor="middle" fill="{couleur_stats}" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(2.4):.1f}" font-style="italic">{nom_pt}</text>
-    <text x="{px:.1f}" y="{ann_y - mm(3.5):.1f}" text-anchor="middle" fill="{couleur_stats}" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(2.0):.1f}">{ligne2}km {d:.1f} · {a:.0f}m</text>"""
+    # annotations_svg déjà calculé dans le bloc profil ci-dessus
 
     # ── OSM SVG strings ───────────────────────────────────────────────────────
     osm_routes_svg = ""
@@ -255,28 +314,16 @@ def build_svg(
     titre_fs    = min(mm(8.5), INNER_W / max(len(nom), 1) * 1.4)
     ss_titre_fs = min(mm(3.8), INNER_W / max(len(sous_titre or " "), 1) * 1.1)
 
-    # ── Graduations profil ────────────────────────────────────────────────────
-    n_grad   = min(10, int(dist_max))
+    # ── Graduations profil : style profilV3 minimaliste (labels km discrets) ──
     grad_svg = ""
-    gy_base  = PROFIL_INNER_Y + PROFIL_INNER_H
-
+    n_grad   = min(8, int(dist_max))
+    gy_km    = COURBE_BASE_Y + mm(1.5)
+    fs_grad  = mm(2.0)
     for i in range(n_grad + 1):
-        d_km   = dist_max * i / n_grad
-        gx, _  = profil_xy(d_km, alt_min)
-        grad_svg += (f'<line x1="{gx:.1f}" y1="{gy_base:.1f}" x2="{gx:.1f}" y2="{gy_base+mm(1.5):.1f}" '
-                     f'stroke="black" stroke-width="0.6"/>')
-        grad_svg += (f'<text x="{gx:.1f}" y="{gy_base+mm(3.5):.1f}" text-anchor="middle" fill="black" '
-                     f'font-family="Georgia, serif" font-size="{mm(2.1):.1f}">{d_km:.0f}</text>')
-
-    alt_lx    = PROFIL_INNER_X - mm(2)
-    py_top, _ = profil_xy(0, alt_max)
-    grad_svg += (f'<text x="{alt_lx:.1f}" y="{py_top:.1f}" text-anchor="end" fill="black" '
-                 f'font-family="Georgia, serif" font-size="{mm(2.1):.1f}">{alt_max:.0f}m</text>')
-    grad_svg += (f'<text x="{alt_lx:.1f}" y="{gy_base:.1f}" text-anchor="end" fill="black" '
-                 f'font-family="Georgia, serif" font-size="{mm(2.1):.1f}">{alt_min:.0f}m</text>')
-    grad_svg += (f'<text x="{PROFIL_INNER_X + PROFIL_INNER_W/2:.1f}" y="{gy_base+mm(6):.1f}" '
-                 f'text-anchor="middle" fill="black" font-family="Georgia, serif" '
-                 f'font-size="{mm(2.1):.1f}" letter-spacing="2">km</text>')
+        d_km  = dist_max * i / n_grad
+        gx, _ = profil_xy(d_km, alt_min)
+        grad_svg += (f'<text x="{gx:.1f}" y="{gy_km + fs_grad:.1f}" text-anchor="middle" fill="black" '
+                     f'font-family="Georgia, serif" font-size="{fs_grad:.1f}" opacity="0.45">{d_km:.0f}</text>')
 
     # ── Point départ sur la carte ─────────────────────────────────────────────
     depart_svg = ""
@@ -302,7 +349,7 @@ def build_svg(
       <rect x="{CARTE_X:.1f}" y="{CARTE_Y:.1f}" width="{CARTE_W:.1f}" height="{CARTE_H:.1f}"/>
     </clipPath>
     <clipPath id="clip-profil">
-      <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_INNER_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_INNER_H:.1f}"/>
+      <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_H:.1f}"/>
     </clipPath>
   </defs>
 
@@ -332,14 +379,7 @@ def build_svg(
     <rect x="{CARTE_X:.1f}" y="{CARTE_Y:.1f}" width="{CARTE_W:.1f}" height="{CARTE_H:.1f}" stroke-width="0.5" fill="none"/>
 
     <line x1="{MARGE:.1f}" y1="{PROFIL_Y:.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y:.1f}" stroke-width="0.7"/>
-    <line x1="{MARGE:.1f}" y1="{PROFIL_Y+mm(0.7):.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y+mm(0.7):.1f}" stroke-width="0.25"/>
-
-    <text x="{W/2:.1f}" y="{PROFIL_Y+mm(5):.1f}" text-anchor="middle" fill="black" stroke="none"
-          font-family="Georgia, serif" font-size="{mm(2.3):.1f}" letter-spacing="4">PROFIL ALTIMÉTRIQUE</text>
-
-    <rect x="{PROFIL_INNER_X:.1f}" y="{PROFIL_INNER_Y:.1f}" width="{PROFIL_INNER_W:.1f}" height="{PROFIL_INNER_H:.1f}" stroke-width="0.4" fill="none"/>
-    <line x1="{PROFIL_INNER_X:.1f}" y1="{PROFIL_INNER_Y+PROFIL_INNER_H:.1f}"
-          x2="{PROFIL_INNER_X+PROFIL_INNER_W:.1f}" y2="{PROFIL_INNER_Y+PROFIL_INNER_H:.1f}" stroke-width="0.8"/>
+    <line x1="{MARGE:.1f}" y1="{PROFIL_Y+mm(0.5):.1f}" x2="{W-MARGE:.1f}" y2="{PROFIL_Y+mm(0.5):.1f}" stroke-width="0.25"/>
 
     {grad_svg}
 
@@ -374,6 +414,7 @@ def build_svg(
       {depart_svg}
     </g>
     <g clip-path="url(#clip-profil)">
+      {'<path d="' + fill_path + f'" fill="{couleur_trace}" opacity="0.18" stroke="none"/>' if fill_path else ''}
       {'<polyline points="' + profil_points_str + f'" stroke="{couleur_trace}" stroke-width="1.8" fill="none"/>' if profil_points_str else ''}
     </g>
   </g>
