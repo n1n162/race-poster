@@ -74,8 +74,8 @@ def build_svg(
     PROFIL_Y = MIDDLE_Y + MIDDLE_H
 
     # ── Colonnes middle ──────────────────────────────────────────────────────
-    COL_LEFT_W  = INNER_W * 0.58
-    COL_RIGHT_W = INNER_W * 0.42
+    COL_LEFT_W  = INNER_W * 0.52
+    COL_RIGHT_W = INNER_W * 0.48
     COL_RIGHT_X = MARGE + COL_LEFT_W
 
     CARTE_X = MARGE
@@ -86,8 +86,8 @@ def build_svg(
     # ── Dossard : remplit la colonne droite ──────────────────────────────────
     dos_w_px = mm(dossard_w_mm)
     dos_h_px = mm(dossard_h_mm)
-    max_dos_w = COL_RIGHT_W - mm(6)
-    max_dos_h = MIDDLE_H - mm(10)
+    max_dos_w = COL_RIGHT_W - mm(3)
+    max_dos_h = MIDDLE_H - mm(6)
     scale = min(1.0, max_dos_w / dos_w_px, max_dos_h / dos_h_px)
     dos_w_px *= scale
     dos_h_px *= scale

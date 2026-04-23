@@ -104,7 +104,9 @@ async def parse_gpx_route(file: UploadFile = File(...)):
         "alt_min": data["alt_min"],
         "alt_max": data["alt_max"],
         "nb_points": data["nb_points_total"],
-        "profil": data["profil"],   # pour prévisualisation profil côté frontend
+        "profil": data["profil"],
+        "points_marquants": data.get("points_marquants", []),
+        "seuil_dplus": data.get("seuil_dplus"),
     }
 
 
@@ -153,7 +155,11 @@ async def _run_generation(job_id: str, gpx_data: dict, req: GenerateRequest):
         race_data["temps"] = req.temps or ""
         race_data["classement"] = req.classement or ""
 
-        points_marquants = [p.dict() for p in req.points_marquants] if req.points_marquants else []
+        # Points marquants : saisie manuelle prioritaire, sinon ceux extraits du GPX
+        if req.points_marquants:
+            points_marquants = [p.dict() for p in req.points_marquants]
+        else:
+            points_marquants = gpx_data.get("points_marquants", [])
 
         svg = build_svg(
             race_data=race_data,
