@@ -122,6 +122,18 @@ export default function App() {
       setGpxToken(data.token)
       // Toujours mettre à jour le nom depuis le GPX (nouveau fichier = nouveau nom)
       if (data.nom_gpx) setNom(data.nom_gpx)
+      // Pré-remplir les points marquants extraits du GPX
+      if (data.points_marquants && data.points_marquants.length > 0) {
+        setPoints(data.points_marquants.map(p => ({
+          dist_km: String(p.dist_km),
+          alt: String(p.alt),
+          nom: p.nom || '',
+          type: p.type || '',
+          source: p.source || 'auto',
+        })))
+      } else {
+        setPoints([])
+      }
     } catch (e) {
       setGpxError(e.message)
     } finally {
@@ -471,7 +483,7 @@ export default function App() {
           <div className="section">
             <div className="section-title">7 · Points marquants (optionnel)</div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>
-              Cols, ravitaillements, sommets… annotés au-dessus du profil
+              ⛰ auto-détectés depuis le GPX · 📍 waypoints nommés du GPX · modifiables
             </p>
 
             <div className="points-list">
@@ -499,6 +511,9 @@ export default function App() {
                     value={pt.alt}
                     onChange={e => updatePoint(i, 'alt', e.target.value)}
                   />
+                  <span style={{fontSize:'0.65rem', color: pt.source === 'gpx' ? 'var(--accent3)' : 'var(--text2)', minWidth:'28px', textAlign:'center'}} title={pt.source === 'gpx' ? 'Waypoint GPX' : 'Sommet auto-détecté'}>
+                    {pt.source === 'gpx' ? '📍' : '⛰'}
+                  </span>
                   <button className="btn-remove" onClick={() => removePoint(i)}>✕</button>
                 </div>
               ))}
